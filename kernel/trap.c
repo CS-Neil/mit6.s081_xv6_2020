@@ -67,6 +67,21 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15 ){
+    //处理页面错误
+    uint64 fault_va = r_stval();
+    char* pa; //分配的物理地址
+
+    if(PGROUNDUP(p->trapframe->sp) -1 < fault_va && fault_va < p->sz && (pa =kalloc())!=0){
+       memset(pa, 0, PGSIZE);
+       //建立 va 与 pa的映射关系，修改pte
+       if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_R | PTE_W | PTE_U ) !=0){
+          kfree(pa); 
+          p->killed = 1;
+       }
+    }else{
+      p->killed = 1; //虚拟地址不合法 or 物理内存不足
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
