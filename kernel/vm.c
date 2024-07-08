@@ -320,13 +320,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    //仅对可写页面设置cow标记
+    if(flags & PTE_W){
+      //禁用写并设置cow fork标记
+      flags = (flags | PTE_F) &  ~PTE_W; 
+      *pte = PA2PTE(pa) | flags; //修改父进程 pte
+
     }
+    if(mappages(new, i, PGSIZE, pa, flags)!=0){
+      uvmunmap(new, 0,i/PGSIZE,1);
+      return -1; //子进程页表复制失败
+    }
+
+    //增加内存引用计数
+    kaddrefcnt((char*)pa);
   }
   return 0;
 
@@ -359,6 +367,15 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
+
+    //处理cow页面情况
+    if(cowpage(pagetable, va0) == 0){
+      //对于需要写入的页面，重新申请一个物理页面，并将 父旧物理页内容拷贝，返回新页pa
+      pa0 = (uint64) cowalloc(pagetable, va0); 
+    }
+
+    //此时pa为新物理页的起始地址，src的内容将写入到 pa0开始的物理块
+
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
